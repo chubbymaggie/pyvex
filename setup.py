@@ -1,59 +1,60 @@
-from distutils.core import setup, Extension, Command
-from distutils.ccompiler import new_compiler
-from distutils import sysconfig
-
 import os
+import urllib2
 import subprocess
-#vgprefix = os.environ["HOME"] + "/valgrind/inst39"
-#vgprefix = "/usr"
-#vgprefix = "/usr"
+from distutils.errors import LibError
+from distutils.core import setup
+from distutils.command.build import build as _build
 
-VEX_INCLUDE = "./vex_include"
-VEX_LIB = "./vex_lib"
 VEX_LIB_NAME = "vex" # can also be vex-amd64-linux
+VEX_PATH = "vex"
+if not os.path.exists(VEX_PATH):
+	VEX_URL = 'https://github.com/angr/vex/archive/dev.tar.gz'
+	with open('dev.tar.gz', 'w') as v:
+		v.write(urllib2.urlopen(VEX_URL).read())
+	if subprocess.call(['tar', 'xzf', 'dev.tar.gz']) != 0:
+		raise LibError("Unable to retrieve libVEX.")
+	VEX_PATH='./vex-dev'
 
-common_files = ["pyvex/pyvex.c", "pyvex/pyvex_irsb.c", "pyvex/pyvex_irstmt.c", "pyvex/pyvex_irtypeenv.c", "pyvex/pyvex_irexpr.c", "pyvex/pyvex_enums.c", 
-"pyvex/pyvex_irconst.c", "pyvex/pyvex_ircallee.c", "pyvex/pyvex_irregarray.c", "pyvex/pyvex_logging.c" ]
-static_files = common_files + [ "pyvex/pyvex_static.c", "pyvex/pyvex_deepcopy.c"]
+def _build_vex():
+	if subprocess.call(['make'], cwd=VEX_PATH) != 0:
+		raise LibError("Unable to build libVEX.")
 
-class StaticPythonCmd(Command):
-	description = "build a static version of python with pyvex included"
-	user_options = []
-	def initialize_options(self): pass
-	def finalize_options(self): pass
+def _build_pyvex():
+	e = os.environ.copy()
+	e['VEX_PATH'] = '../' + VEX_PATH
+	if subprocess.call(['make'], cwd='pyvex_c', env=e) != 0:
+		raise LibError("Unable to build pyvex-static.")
+
+def _build_ffi():
+	if subprocess.call(['python', 'make_ffi.py', os.path.join(VEX_PATH,'pub')]) != 0:
+		raise LibError("Unable to generate cffi file.")
+
+class build(_build):
 	def run(self):
-		comp = new_compiler()
-		#comp.add_include_dir(vgprefix + "/include/valgrind")
-		#comp.add_library_dir(".")
-		comp.add_include_dir("./vg_include")
-		comp.add_library_dir("./vg_lib")
-		comp.add_library("libvex")
-		comp.define_macro("PYVEX_STATIC", "1")
-		comp.define_macro("PYVEX_STATIC_PYTHON", "1")
-		comp.add_include_dir(sysconfig.get_python_inc())
-		comp.add_library_dir(sysconfig.get_python_lib())
-		comp.add_library("python2.7")
-		os = comp.compile(static_files, extra_preargs=["--std=c99"], output_dir="build")
-		comp.link_executable(os, "pyvex_python")
+		self.execute(_build_vex, (), msg="Building libVEX")
+		self.execute(_build_pyvex, (), msg="Building pyvex-static")
+		self.execute(_build_ffi, (), msg="Creating CFFI defs file")
+		_build.run(self)
+cmdclass = { 'build': build }
 
-setup(name="pyvex", version="1.0",
-      ext_modules=[Extension(
-		"pyvex",
-		static_files,
-		include_dirs=[VEX_INCLUDE],
-		library_dirs=[VEX_LIB],
-		libraries=[VEX_LIB_NAME],
-		extra_objects=[], #, vgprefix + "/lib/valgrind/libvex-amd64-linux.a"],
-	        define_macros=[('PYVEX_STATIC', '1')],
-		extra_compile_args=["--std=c99"]),
-     # Extension(
-	#	"pyvex_dynamic",
-	#        common_files,
-	#	include_dirs=[vgprefix + "/include/valgrind"],
-	#	library_dirs=[vgprefix + "/lib/valgrind"],
-	#	libraries=["vex-amd64-linux"],
-	#	extra_objects=[], #, vgprefix + "/lib/valgrind/libvex-amd64-linux.a"],
-	#	extra_compile_args=["--std=c99"])
+try:
+	from setuptools.command.develop import develop as _develop
+	class develop(_develop):
+		def run(self):
+			self.execute(_build_vex, (), msg="Building libVEX")
+			self.execute(_build_pyvex, (), msg="Building pyvex-static")
+			self.execute(_build_ffi, (), msg="Creating CFFI defs file")
+			_develop.run(self)
+	cmdclass['develop'] = develop
+except ImportError:
+	print "Proper 'develop' support unavailable."
+
+setup(
+	name="pyvex", version="3.11", description="A Python interface to libVEX and VEX IR.",
+	packages=['pyvex', 'pyvex.IRConst', 'pyvex.IRExpr', 'pyvex.IRStmt'],
+	data_files=[
+		('lib', ('pyvex_c/pyvex_static.so',),),
 	],
-	cmdclass = {'build_static': StaticPythonCmd}
-     )
+	cmdclass=cmdclass,
+	install_requires=[ 'pycparser', 'cffi>=1.0.3', 'archinfo' ]
+)
