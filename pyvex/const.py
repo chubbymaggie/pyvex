@@ -1,7 +1,10 @@
-from .. import VEXObject
+from . import VEXObject
 
-# IRConst heirarchy
+# IRConst hierarchy
 class IRConst(VEXObject):
+
+    __slots__ = ['tag', 'value']
+
     type = None
 
     def __init__(self, c_expr):
@@ -137,7 +140,9 @@ class V256(IRConst):
     def __str__(self):
         return "%x" % self.value
 
-from .. import ints_to_enums, enums_to_ints, PyVEXError, ffi, type_sizes
+from .enums import ints_to_enums, enums_to_ints, type_sizes
+from .errors import PyVEXError
+from . import ffi
 
 tag_to_class = {
     enums_to_ints['Ico_U1']: U1,
